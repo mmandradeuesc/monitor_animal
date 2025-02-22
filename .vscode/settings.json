@@ -45,6 +45,9 @@
         "pwm.h": "c",
         "adc.h": "c",
         "gpio.h": "c",
-        "clocks.h": "c"
+        "clocks.h": "c",
+        "pio.h": "c",
+        "sync.h": "c",
+        "monitor.pio.h": "c"
     }
 }

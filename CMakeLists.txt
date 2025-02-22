@@ -49,6 +49,7 @@ pico_sdk_init()
 add_executable(monitor 
     monitor.c 
     ssd1306.c
+   
 )
 
 # Define nome e versão do programa

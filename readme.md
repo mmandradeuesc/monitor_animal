@@ -1,4 +1,4 @@
-# MONITOR, PROJETO FINAL MONITORAMENTO AMBIENTAL
+# WildLife, PROJETO FINAL MONITORAMENTO AMBIENTAL
 
 ## Tarefa FINAL 22/02
 
@@ -14,7 +14,7 @@ Certifique-se de que você tem o ambiente configurado conforme abaixo:
 ### Instruções de Configuração
 1. Clone o repositório e abra a pasta do projeto no VSCode.
    ```sh
-   git clone https://github.com/mmandradeuesc/monitor_ambiental
+   git clone https://github.com/mmandradeuesc/monitor_animal
    cd bitdog_ad
    code .
 

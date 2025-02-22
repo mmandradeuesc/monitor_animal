@@ -14,6 +14,7 @@
 #include "monitor.pio.h"
 #include "font.h"
 #include "ssd1306.h"
+#include "hardware/sync.h"
 
 // Definições de pinos
 #define DISPLAY_SDA_PIN 14
@@ -108,6 +109,47 @@ bool display_initialized = false;
 // PIO para NeoPixels
 PIO pio = pio0;
 uint sm = 0;
+
+// Declaração da função put_pixel
+static inline void put_pixel(uint32_t pixel_grb) {
+    pio_sm_put_blocking(pio, sm, pixel_grb << 8u);
+}
+
+// Declaração do spin lock global
+static spin_lock_t *pixel_lock;
+static int pixel_lock_num;
+
+// Constantes para animação de chamas
+const uint8_t graphic_frames[4][5][5] = {
+    {
+        {1, 2, 3, 2, 1}, 
+        {0, 1, 2, 1, 0},
+        {0, 0, 1, 0, 0},
+        {0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0}   
+    },
+    {
+        {1, 2, 3, 2, 1},
+        {1, 2, 3, 2, 1},
+        {0, 1, 2, 1, 0},
+        {0, 0, 1, 0, 0},
+        {0, 0, 0, 0, 0}
+    },
+    {
+        {1, 2, 3, 2, 1},
+        {1, 2, 3, 2, 1},
+        {1, 2, 3, 2, 1},
+        {0, 1, 2, 1, 0},
+        {0, 0, 1, 0, 0}
+    },
+    {
+        {1, 2, 3, 2, 1},
+        {1, 2, 3, 2, 1},
+        {1, 2, 3, 2, 1},
+        {1, 2, 3, 2, 0},
+        {0, 1, 0, 1, 0}
+    }
+};
 
 void init_sensors() {
     strcpy(sensors[0].name, "Temperatura");
@@ -237,53 +279,94 @@ void play_startup_music() {
 }
 
 void init_neopixels() {
+    // Inicializa o spin lock
+    pixel_lock_num = spin_lock_claim_unused(true);
+    pixel_lock = spin_lock_init(pixel_lock_num);
+    
     uint offset = pio_add_program(pio, &monitor_program);
     monitor_program_init(pio, sm, offset, OUT_PIN);
-    // Teste inicial: acende todos os LEDs em azul para verificar funcionamento
-    for (int i = 0; i < NUM_PIXELS; i++) {
-        pio_sm_put_blocking(pio, sm, urgb_u32(0, 0, 255));
-    }
-    sleep_ms(1000); // Mantém aceso por 1 segundo
-    for (int i = 0; i < NUM_PIXELS; i++) {
-        pio_sm_put_blocking(pio, sm, 0); // Apaga
-    }
-}
-
-static inline void put_pixel(uint32_t pixel_grb) {
-    pio_sm_put_blocking(pio, sm, pixel_grb);
-}
-
-void update_neopixel_bars() {
-    int heights[3] = {0, 0, 0};
     
-    if (temp_enabled) {
-        heights[0] = (int)((sensors[0].value - sensors[0].min_val) / (sensors[0].max_val - sensors[0].min_val) * 5 + 0.5);
-        if (heights[0] > 5) heights[0] = 5;
-        if (heights[0] < 0) heights[0] = 0;
+    // Limpa todos os pixels inicialmente
+    for (int i = 0; i < NUM_PIXELS; i++) {
+        put_pixel(0);
     }
-    if (flow_enabled) {
-        heights[1] = (int)((sensors[1].value - sensors[1].min_val) / (sensors[1].max_val - sensors[1].min_val) * 5 + 0.5);
-        if (heights[1] > 5) heights[1] = 5;
-        if (heights[1] < 0) heights[1] = 0;
-    }
-    if (rain_enabled) {
-        heights[2] = (int)((sensors[2].value - sensors[2].min_val) / (sensors[2].max_val - sensors[2].min_val) * 5 + 0.5);
-        if (heights[2] > 5) heights[2] = 5;
-        if (heights[2] < 0) heights[2] = 0;
-    }
+    
+    // Aguarda a conclusão da transmissão
+    sleep_ms(1);
+}
 
-    for (int row = 0; row < 5; row++) {
-        for (int col = 0; col < 5; col++) {
-            int pixel_index = row * 5 + col;
-            if (col < 3 && row < heights[col]) {
-                float fraction = (float)row / (heights[col] > 1 ? heights[col] - 1 : 1);
-                uint8_t r = (uint8_t)(fraction * 255);
-                uint8_t b = (uint8_t)((1.0f - fraction) * 255);
-                put_pixel(urgb_u32(r, 0, b));
-            } else {
-                put_pixel(urgb_u32(0, 0, 0));
+// Função auxiliar para mapear coordenadas x,y para o índice do LED na matriz
+static int xy_to_pixel_index(int x, int y) {
+    if (y % 2 == 0) {
+        // Linhas pares: da esquerda para a direita
+        return y * 5 + x;
+    } else {
+        // Linhas ímpares: da direita para a esquerda
+        return y * 5 + (4 - x);
+    }
+}
+
+// Função melhorada para atualizar a animação de chamas
+void update_graphic_animation(PIO pio, uint sm, uint8_t frame) {
+    // Array para armazenar todos os pixels antes de enviá-los
+    uint32_t pixels[NUM_PIXELS] = {0};
+    
+    // Preenche o array com as cores da animação
+    for (int y = 0; y < 5; y++) {
+        for (int x = 0; x < 5; x++) {
+            int pixel_index = xy_to_pixel_index(x, y);
+            uint8_t intensity = graphic_frames[frame][y][x];
+            
+            uint8_t r = 0, g = 0, b = 0;
+            switch (intensity) {
+                case 0: // Desligado
+                    break;
+                case 1: // Vermelho escuro
+                    r = 6;
+                    break;
+                case 2: // Laranja
+                    g = 0;
+                    b = 10;
+                    break;
+                case 3: // Amarelo
+                    g = 0;
+                    b = 10;
+                    break;
             }
+            
+            // Formato GRB para NeoPixels
+            pixels[pixel_index] = ((uint32_t)g << 16) | ((uint32_t)r << 8) | b;
         }
+    }
+    
+    // Desabilita interrupções durante o envio para timing preciso
+    uint32_t save = spin_lock_blocking(pixel_lock);
+    
+    // Envia todos os pixels de uma vez
+    for (int i = 0; i < NUM_PIXELS; i++) {
+        put_pixel(pixels[i]);
+    }
+    
+    // Restaura interrupções
+    spin_unlock(pixel_lock, save);
+    
+    // Aguarda conclusão da transmissão
+    sleep_us(50);
+}
+
+// Função principal de atualização da matriz
+void update_neopixel_bars() {
+    static uint32_t last_animation_time = 0;
+    static int current_frame = 0;
+    uint32_t current_time = to_ms_since_boot(get_absolute_time());
+
+    // Atualiza a animação a cada 200ms
+    if (current_time - last_animation_time >= 200) {
+        current_frame = (current_frame + 1) % 4;
+        last_animation_time = current_time;
+        
+        // Atualiza a animação
+        update_graphic_animation(pio, sm, current_frame);
     }
 }
 
@@ -300,9 +383,9 @@ void display_sos_neopixel() {
 
     for (int i = 0; i < NUM_PIXELS; i++) {
         if (alarm_on) {
-            put_pixel(urgb_u32(255, 0, 0));
+            put_pixel(urgb_u32(255, 0, 0) << 8u);
         } else {
-            put_pixel(urgb_u32(0, 0, 0));
+            put_pixel(0); // Apaga
         }
     }
 }
