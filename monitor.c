@@ -471,37 +471,57 @@ void play_tone(uint frequency, uint duration) {
     pwm_set_gpio_level(BUZZER_PIN, 0);
 }
 
-void update_fire_alarm() {
-    if (!fire_enabled) return;
-    uint32_t current_time = to_ms_since_boot(get_absolute_time());
-    uint32_t t = current_time % 5400; // Ciclo total de 5400ms
-    bool alarm_on = false;
-
-    // S: 3 pontos (200ms ON, 200ms OFF)
-    if (t < 200) alarm_on = true;              // Ponto 1 ON
-    else if (t >= 400 && t < 600) alarm_on = true; // Ponto 2 ON
-    else if (t >= 800 && t < 1000) alarm_on = true; // Ponto 3 ON
-    // Espaço entre S e O: 600ms (1000 a 1600)
-    
-    // O: 3 traços (600ms ON, 200ms OFF)
-    else if (t >= 1600 && t < 2200) alarm_on = true; // Traço 1 ON
-    else if (t >= 2400 && t < 3000) alarm_on = true; // Traço 2 ON
-    else if (t >= 3200 && t < 3800) alarm_on = true; // Traço 3 ON
-    // Espaço entre O e S: 600ms (3800 a 4400)
-    
-    // S: 3 pontos (200ms ON, 200ms OFF)
-    else if (t >= 4400 && t < 4600) alarm_on = true; // Ponto 1 ON
-    else if (t >= 4800 && t < 5000) alarm_on = true; // Ponto 2 ON
-    else if (t >= 5200 && t < 5400) alarm_on = true; // Ponto 3 ON
-    // Espaço final: 1400ms (não precisa de ação, ciclo reinicia)
-
-    if (alarm_on) {
-        gpio_put(LED_R_PIN, 1); // LED vermelho ON
-        play_tone(650, 50);     // Tom curto (não bloqueia o ciclo)
-    } else {
-        gpio_put(LED_R_PIN, 0); // LED vermelho OFF
+void update_sos_alert() {
+    if (!fire_enabled || !fire_alert_active) {
+        gpio_put(LED_R_PIN, 0);
+        pwm_set_gpio_level(BUZZER_PIN, 0);
+        for (int i = 0; i < NUM_PIXELS; i++) {
+            put_pixel(0); // Apaga NeoPixels
+        }
+        return;
     }
-    display_sos_neopixel(); // Sincroniza a matriz de LEDs
+
+    static uint32_t last_update = 0;
+    static uint buzzer_wrap = 0; // Armazena o valor do wrap do PWM
+    uint32_t current_time = to_ms_since_boot(get_absolute_time());
+    uint32_t t = current_time % 5400; // Ciclo de 5400ms
+    bool led_on = false;
+    bool neopixel_on = false;
+    bool buzzer_on = false;
+
+    // Padrão SOS: tempos em ms
+    // S: 3 pontos (200ms ON, 200ms OFF) -> 0-1000
+    // O: 3 traços (600ms ON, 200ms OFF) -> 1600-3800
+    // S: 3 pontos (200ms ON, 200ms OFF) -> 4400-5400
+    if (t < 200 || (t >= 400 && t < 600) || (t >= 800 && t < 1000) ||           // S (pontos)
+        (t >= 1600 && t < 2200) || (t >= 2400 && t < 3000) || (t >= 3200 && t < 3800) || // O (traços)
+        (t >= 4400 && t < 4600) || (t >= 4800 && t < 5000) || (t >= 5200 && t < 5400)) { // S (pontos)
+        led_on = true;
+        neopixel_on = true;
+        buzzer_on = true;
+    }
+
+    // Atualiza LED
+    gpio_put(LED_R_PIN, led_on ? 1 : 0);
+
+    // Atualiza NeoPixels (vermelho corrigido: GRB = 0, 255, 0)
+    uint32_t save = spin_lock_blocking(pixel_lock);
+    for (int i = 0; i < NUM_PIXELS; i++) {
+        put_pixel(neopixel_on ? urgb_u32(0, 255, 0) : 0); // Vermelho em GRB
+    }
+    spin_unlock(pixel_lock, save);
+
+    // Atualiza buzzer (não bloqueante)
+    uint slice_num = pwm_gpio_to_slice_num(BUZZER_PIN);
+    if (buzzer_on && last_update != current_time) {
+        buzzer_wrap = (uint)(clock_get_hz(clk_sys) / 650) - 1; // Calcula e armazena o wrap
+        pwm_set_wrap(slice_num, buzzer_wrap);
+        pwm_set_gpio_level(BUZZER_PIN, buzzer_wrap / 2); // Define nível como 50% do ciclo
+    } else {
+        pwm_set_gpio_level(BUZZER_PIN, 0);
+    }
+
+    last_update = current_time;
 }
 
 void detect_fire() {
@@ -851,7 +871,7 @@ int main() {
         ssd1306_draw_pixel(0, i, true);
         ssd1306_draw_pixel(127, i, true);
     }
-    draw_string(20, 20, "EMBARCATECH", false);
+    draw_string(20, 20, "WILDLIFE", false);
     ssd1306_update();
     sleep_ms(5000);
 
@@ -872,7 +892,7 @@ int main() {
         check_buttons();
         
         if (fire_enabled && fire_alert_active) {
-            update_fire_alarm();
+            update_sos_alert();
         } else {
             update_neopixel_bars();
         }
