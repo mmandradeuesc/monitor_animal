@@ -526,9 +526,30 @@ void update_sos_alert() {
 
 void detect_fire() {
     if (!fire_enabled || fire_alert_active) return;
-    if (rand() % 1000 < 10) {
+
+    // Verifica se apenas o incêndio está ativo
+    bool only_fire_enabled = fire_enabled && !temp_enabled && !flow_enabled && !rain_enabled && !wildlife_enabled;
+
+    // Probabilidade base: 1% (10/1000)
+    int base_chance = 10;
+    // Aumenta a probabilidade para 20% (200/1000) se apenas incêndio estiver ativo
+    int fire_chance = only_fire_enabled ? 200 : base_chance;
+
+    static uint32_t last_check_time = 0;
+    uint32_t current_time = to_ms_since_boot(get_absolute_time());
+
+    // Força um incêndio após 5 segundos se apenas incêndio estiver ativo
+    if (only_fire_enabled && (current_time - last_check_time > 5000)) {
         fire_alert_active = true;
-        fire_alert_start = to_ms_since_boot(get_absolute_time());
+        fire_alert_start = current_time;
+        last_check_time = current_time;
+        printf("\n*** ALERTA DE INCENDIO: Fogo detectado na floresta! (Forçado após 5s) ***\n");
+    }
+    // Detecção aleatória
+    else if (rand() % 1000 < fire_chance) {
+        fire_alert_active = true;
+        fire_alert_start = current_time;
+        last_check_time = current_time;
         printf("\n*** ALERTA DE INCENDIO: Fogo detectado na floresta! ***\n");
     }
 }

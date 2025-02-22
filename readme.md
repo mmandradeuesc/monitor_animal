@@ -86,4 +86,5 @@ pico_enable_stdio_uart(environmental_monitor 1)
 pico_add_extra_outputs(environmental_monitor)
  
 - Link do vídeo demonstração do programa:
+https://drive.google.com/file/d/10vFOH2OBewdYwKQczrQAFcplCnA_rUx7/view?usp=sharing
 
