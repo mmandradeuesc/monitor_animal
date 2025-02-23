@@ -1,3 +1,10 @@
+/**
+ * @file ssd1306.c
+ * @brief Driver para display OLED SSD1306
+ *
+ * Implementa funções para controle do display OLED SSD1306 via I2C.
+ * Suporta display 128x64 pixels organizado em 8 páginas de 128 bytes.
+ */
 #include "ssd1306.h"
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
@@ -7,11 +14,22 @@
 // Display buffer reorganizado para páginas
 uint8_t buffer[DISPLAY_HEIGHT/8][DISPLAY_WIDTH];
 
+/** Buffer do display organizado em páginas */
+uint8_t buffer[DISPLAY_HEIGHT/8][DISPLAY_WIDTH];
+
+/**
+ * @brief Envia comando para o display
+ * @param cmd Byte de comando a ser enviado
+ */
 void ssd1306_send_command(uint8_t cmd) {
     uint8_t buf[2] = {0x00, cmd};  // 0x00 indica comando
     i2c_write_blocking(I2C_PORT, endereco, buf, 2, false);
 }
-
+/**
+ * @brief Envia dados para o display
+ * @param data Ponteiro para os dados
+ * @param len Quantidade de bytes a enviar
+ */
 void ssd1306_send_data(uint8_t *data, size_t len) {
     // Primeiro byte 0x40 indica dados
     uint8_t *temp_buffer = malloc(len + 1);
@@ -20,7 +38,15 @@ void ssd1306_send_data(uint8_t *data, size_t len) {
     i2c_write_blocking(I2C_PORT, endereco, temp_buffer, len + 1, false);
     free(temp_buffer);
 }
-
+/**
+ * @brief Inicializa o display OLED
+ * 
+ * Configura I2C e envia sequência de inicialização:
+ * - Configura clock e multiplexação
+ * - Ativa charge pump
+ * - Define modo de endereçamento horizontal
+ * - Configura contraste e níveis de tensão
+ */
 void ssd1306_init() {
     sleep_ms(100);  // Aguarda inicialização do display
   
@@ -61,11 +87,21 @@ void ssd1306_init() {
     ssd1306_clear();
     ssd1306_update();
 }
-
+/**
+ * @brief Limpa o buffer do display
+ * 
+ * Preenche todo o buffer com zeros
+ */
 void ssd1306_clear() {
     memset(buffer, 0, sizeof(buffer));
 }
-
+/**
+ * @brief Desenha um pixel no buffer
+ * 
+ * @param x Coordenada X (0-127)
+ * @param y Coordenada Y (0-63)
+ * @param color true para pixel aceso, false para apagado
+ */
 void ssd1306_draw_pixel(int x, int y, bool color) {
     if (x < 0 || x >= DISPLAY_WIDTH || y < 0 || y >= DISPLAY_HEIGHT) 
         return;
@@ -80,19 +116,33 @@ void ssd1306_draw_pixel(int x, int y, bool color) {
         buffer[page][x] &= ~(1 << bit);
     }
 }
-
+/**
+ * @brief Define endereço das páginas
+ * 
+ * @param start Página inicial (0-7)
+ * @param end Página final (0-7)
+ */
 void ssd1306_set_page_address(uint8_t start, uint8_t end) {
     ssd1306_send_command(0x22);  // Page address command
     ssd1306_send_command(start & 0x07);
     ssd1306_send_command(end & 0x07);
 }
-
+/**
+ * @brief Define endereço das colunas
+ * 
+ * @param start Coluna inicial (0-127)
+ * @param end Coluna final (0-127)
+ */
 void ssd1306_set_column_address(uint8_t start, uint8_t end) {
     ssd1306_send_command(0x21);  // Column address command
     ssd1306_send_command(start & 0x7F);
     ssd1306_send_command(end & 0x7F);
 }
-
+/**
+ * @brief Atualiza o display com o conteúdo do buffer
+ * 
+ * Envia o buffer completo para o display página por página
+ */
 void ssd1306_update() {
     // Define o endereço inicial
     ssd1306_set_page_address(0, 7);
