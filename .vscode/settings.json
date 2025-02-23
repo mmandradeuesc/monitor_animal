@@ -48,6 +48,8 @@
         "clocks.h": "c",
         "pio.h": "c",
         "sync.h": "c",
-        "monitor.pio.h": "c"
+        "monitor.pio.h": "c",
+        "string.h": "c",
+        "time.h": "c"
     }
 }

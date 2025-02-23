@@ -1,3 +1,15 @@
+/**
+ * @file monitor.c
+ * @brief WILDLIFE - Sistema de Monitoramento Ambiental para Raspberry Pi Pico
+ *
+ * Este sistema realiza o monitoramento de condições ambientais incluindo temperatura,
+ * fluxo de água, chuva, detecção de incêndio e presença de vida silvestre.
+ * Utiliza diversos sensores e fornece feedback visual através de display OLED,
+ * matriz de NeoPixels e indicadores LED.
+ *
+ * @author Marcel Mascarenhas Andrade
+ * @date 2025-06-22
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,20 +29,23 @@
 #include "hardware/sync.h"
 
 // Definições de pinos
-#define DISPLAY_SDA_PIN 14
-#define DISPLAY_SCL_PIN 15
-#define I2C_PORT i2c1
-#define LED_R_PIN 13
-#define LED_G_PIN 11
-#define LED_B_PIN 12
-#define BUTTON_A_PIN 5
-#define BUTTON_B_PIN 6
-#define JOY_BUTTON_PIN 22
-#define JOY_X_PIN 27
-#define JOY_Y_PIN 26
-#define BUZZER_PIN 10
-#define NUM_PIXELS 25
-#define OUT_PIN 7
+/**
+ * @brief Definições de pinos para conexões de hardware
+ */
+#define DISPLAY_SDA_PIN 14    ///< Pino SDA para display OLED
+#define DISPLAY_SCL_PIN 15    ///< Pino SCL para display OLED
+#define I2C_PORT i2c1         ///< Porta I2C utilizada
+#define LED_R_PIN 13          ///< Pino do LED vermelho
+#define LED_G_PIN 11          ///< Pino do LED verde
+#define LED_B_PIN 12          ///< Pino do LED azul
+#define BUTTON_A_PIN 5        ///< Pino do botão A
+#define BUTTON_B_PIN 6        ///< Pino do botão B
+#define JOY_BUTTON_PIN 22     ///< Pino do botão do joystick
+#define JOY_X_PIN 27          ///< Pino X do joystick (ADC)
+#define JOY_Y_PIN 26          ///< Pino Y do joystick (ADC)
+#define BUZZER_PIN 10         ///< Pino do buzzer
+#define NUM_PIXELS 25         ///< Número total de NeoPixels
+#define OUT_PIN 7             ///< Pino de dados dos NeoPixels
 
 // Protótipos de funções
 void display_sensor_data(void);
@@ -68,11 +83,14 @@ uint32_t last_debounce_time_joy = 0;
 const uint32_t debounce_delay = 50;
 
 // Estrutura para animais silvestres
+/**
+ * @brief Estrutura para informações de vida silvestre
+ */
 typedef struct {
-    char name[20];
-    char link[150];
-    bool detected;
-    uint32_t detection_time;
+    char name[20];           ///< Identificação do animal
+    char link[150];         ///< Link para imagem capturada
+    bool detected;          ///< Status de detecção
+    uint32_t detection_time; ///< Momento da detecção
 } WildlifeInfo;
 
 WildlifeInfo wildlife[] = {
@@ -90,17 +108,21 @@ bool wildlife_alert_active = false;
 #define WILDLIFE_ALERT_DURATION_MS 10000
 
 // Estrutura para sensores
+/**
+ * @brief Estrutura para configuração dos sensores
+ */
 typedef struct {
-    char name[15];
-    char unit[5];
-    float min_val;
-    float max_val;
-    float anomaly_min;
-    float anomaly_max;
-    float variation;
-    float value;
-    float history[10];
+    char name[15];      ///< Nome do sensor
+    char unit[5];       ///< Unidade de medida
+    float min_val;      ///< Valor mínimo válido
+    float max_val;      ///< Valor máximo válido
+    float anomaly_min;  ///< Limite mínimo para detecção de anomalia
+    float anomaly_max;  ///< Limite máximo para detecção de anomalia
+    float variation;    ///< Variação permitida entre leituras
+    float value;        ///< Valor atual do sensor
+    float history[10];  ///< Histórico de valores para média móvel
 } SensorConfig;
+
 
 SensorConfig sensors[3];
 int current_sensor_index = 0;
@@ -119,7 +141,7 @@ static inline void put_pixel(uint32_t pixel_grb) {
 static spin_lock_t *pixel_lock;
 static int pixel_lock_num;
 
-// Constantes para animação de chamas
+// Constantes para animação do gráfico
 const uint8_t graphic_frames[4][5][5] = {
     {
         {1, 2, 3, 2, 1}, 
@@ -150,7 +172,14 @@ const uint8_t graphic_frames[4][5][5] = {
         {0, 1, 0, 1, 0}
     }
 };
-
+/**
+ * @brief Inicializa os sensores do sistema
+ * 
+ * Configura os parâmetros iniciais para:
+ * - Sensor de temperatura (15-35°C)
+ * - Sensor de fluxo de água (0-30 L/min)
+ * - Sensor de chuva (0-100 mm/h)
+ */
 void init_sensors() {
     strcpy(sensors[0].name, "Temperatura");
     strcpy(sensors[0].unit, "C");
@@ -185,7 +214,17 @@ void init_sensors() {
         }
     }
 }
-
+/**
+ * @brief Inicializa o hardware do sistema
+ * 
+ * Configura todos os componentes físicos:
+ * - Display OLED via I2C
+ * - Interface I2C
+ * - GPIOs para LEDs e botões
+ * - ADC para joystick
+ * - PWM para buzzer
+ * - Matriz de NeoPixels
+ */
 void init_hardware() {
     stdio_init_all();
     ssd1306_init();
@@ -227,10 +266,25 @@ void init_hardware() {
 }
 
 // Definição de urgb_u32 movida para antes do primeiro uso
+/**
+ * @brief Converte valores RGB para formato GRB dos NeoPixels
+ * 
+ * @param r Valor do componente vermelho (0-255)
+ * @param g Valor do componente verde (0-255)
+ * @param b Valor do componente azul (0-255)
+ * @return uint32_t Valor formatado para NeoPixel (GRB)
+ */
 static inline uint32_t urgb_u32(uint8_t r, uint8_t g, uint8_t b) {
     return ((uint32_t)(r) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(b); // GRB
 }
-
+/**
+ * @brief Desenha um caractere no display OLED
+ * 
+ * @param x Posição X no display (0-127)
+ * @param y Posição Y no display (0-63)
+ * @param c Caractere a ser desenhado
+ * @param inverted Se verdadeiro, inverte as cores do caractere
+ */
 void draw_char(int x, int y, char c, bool inverted) {
     int index = (unsigned char)c;
     for (int i = 0; i < 8; i++) {
@@ -245,7 +299,14 @@ void draw_char(int x, int y, char c, bool inverted) {
         }
     }
 }
-
+/**
+ * @brief Desenha uma string no display OLED
+ * 
+ * @param x Posição X inicial no display
+ * @param y Posição Y inicial no display
+ * @param str String a ser desenhada
+ * @param inverted Se verdadeiro, inverte as cores do texto
+ */
 void draw_string(int x, int y, const char *str, bool inverted) {
     int orig_x = x;
     for (int i = 0; str[i] != '\0'; i++) {
@@ -262,22 +323,58 @@ void draw_string(int x, int y, const char *str, bool inverted) {
         }
     }
 }
-
+/**
+ * @brief Desenha uma linha horizontal no display
+ * 
+ * @param x0 Posição X inicial
+ * @param y0 Posição Y
+ * @param length Comprimento da linha em pixels
+ */
 void draw_horizontal_line(int x0, int y0, int length) {
     for (int i = 0; i < length; i++) {
         ssd1306_draw_pixel(x0 + i, y0, true);
     }
 }
-
+/**
+ * @brief Toca a música de inicialização
+ * 
+ * Reproduz uma sequência de notas musicais usando o buzzer
+ * para indicar que o sistema foi iniciado
+ */
 void play_startup_music() {
-    uint notes[] = {261, 329, 392, 523};
-    uint durations[] = {200, 200, 200, 400};
-    for (int i = 0; i < 4; i++) {
+    // Notas musicais (frequências em Hz)
+    uint notes[] = {
+        392,  // Sol4
+        494,  // Si4
+        587,  // Ré5
+        784,  // Sol5
+        587,  // Ré5
+        494,  // Si4
+        392   // Sol4
+    };
+    
+    // Durações das notas em ms (total: 7000ms)
+    uint durations[] = {
+        1000,  // 1.0s
+        1000,  // 1.0s
+        1000,  // 1.0s
+        1500,  // 1.5s
+        1000,  // 1.0s
+        750,   // 0.75s
+        750    // 0.75s
+    };
+    
+    for (int i = 0; i < 7; i++) {
         play_tone(notes[i], durations[i]);
-        sleep_ms(50);
+        sleep_ms(50);  // Pequena pausa entre as notas
     }
 }
-
+/**
+ * @brief Inicializa a matriz de NeoPixels
+ * 
+ * Configura o PIO e inicializa o hardware para controle
+ * da matriz 5x5 de LEDs RGB (WS2812B)
+ */
 void init_neopixels() {
     // Inicializa o spin lock
     pixel_lock_num = spin_lock_claim_unused(true);
@@ -296,6 +393,13 @@ void init_neopixels() {
 }
 
 // Função auxiliar para mapear coordenadas x,y para o índice do LED na matriz
+/**
+ * @brief Converte coordenadas x,y para índice do LED na matriz
+ * 
+ * @param x Coordenada X (0-4)
+ * @param y Coordenada Y (0-4)
+ * @return int Índice do LED na matriz
+ */
 static int xy_to_pixel_index(int x, int y) {
     if (y % 2 == 0) {
         // Linhas pares: da esquerda para a direita
@@ -369,7 +473,12 @@ void update_neopixel_bars() {
         update_graphic_animation(pio, sm, current_frame);
     }
 }
-
+/**
+ * @brief Exibe padrão SOS na matriz de LEDs
+ * 
+ * Implementa o padrão Morse SOS (... --- ...) usando
+ * os LEDs da matriz para sinalização de emergência
+ */
 void display_sos_neopixel() {
     uint32_t current_time = to_ms_since_boot(get_absolute_time());
     uint32_t t = current_time % 6000;
@@ -389,7 +498,16 @@ void display_sos_neopixel() {
         }
     }
 }
-
+/**
+ * @brief Menu de configuração inicial
+ * 
+ * Permite habilitar/desabilitar os diferentes módulos:
+ * - Temperatura
+ * - Fluxo de água
+ * - Chuva
+ * - Detecção de incêndio
+ * - Monitoramento de vida silvestre
+ */
 void init_menu() {
     const char *options[] = {"Temperatura", "Fluviometro", "Chuva", "Incendio", "Vida Silvestre"};
     bool states[] = {temp_enabled, flow_enabled, rain_enabled, fire_enabled, wildlife_enabled};
@@ -451,7 +569,9 @@ void init_menu() {
         sleep_ms(50);
     }
 }
-
+/**
+ * @brief Reproduz alerta sonoro para detecção de animais
+ */
 void play_wildlife_alert() {
     if (!wildlife_enabled) return;
     for (int i = 0; i < 3; i++) {
@@ -459,7 +579,12 @@ void play_wildlife_alert() {
         sleep_ms(100);
     }
 }
-
+/**
+ * @brief Reproduz um tom no buzzer
+ * 
+ * @param frequency Frequência do tom em Hz
+ * @param duration Duração em milissegundos
+ */
 void play_tone(uint frequency, uint duration) {
     uint slice_num = pwm_gpio_to_slice_num(BUZZER_PIN);
     uint wrap_value = (uint)(clock_get_hz(clk_sys) / frequency) - 1;
@@ -470,7 +595,12 @@ void play_tone(uint frequency, uint duration) {
     sleep_ms(duration);
     pwm_set_gpio_level(BUZZER_PIN, 0);
 }
-
+/**
+ * @brief Atualiza o estado do alerta SOS
+ * 
+ * Controla LEDs, buzzer e matriz de NeoPixels durante
+ * o alerta de incêndio
+ */
 void update_sos_alert() {
     if (!fire_enabled || !fire_alert_active) {
         gpio_put(LED_R_PIN, 0);
@@ -523,7 +653,14 @@ void update_sos_alert() {
 
     last_update = current_time;
 }
-
+/**
+ * @brief Detecta condições de incêndio na área monitorada
+ * 
+ * Simula a detecção de incêndio com base em probabilidades:
+ * - 1% de chance base de detecção
+ * - 20% de chance quando apenas o módulo de incêndio está ativo
+ * - Força detecção após 5 segundos se apenas incêndio estiver ativo
+ */
 void detect_fire() {
     if (!fire_enabled || fire_alert_active) return;
 
@@ -553,7 +690,15 @@ void detect_fire() {
         printf("\n*** ALERTA DE INCENDIO: Fogo detectado na floresta! ***\n");
     }
 }
-
+/**
+ * @brief Detecta presença de animais silvestres
+ * 
+ * Simula a detecção de animais com:
+ * - 5% de chance de detecção a cada verificação
+ * - Seleciona aleatoriamente um animal do banco de dados
+ * - Registra horário da detecção
+ * - Ativa alerta sonoro e visual
+ */
 void detect_wildlife() {
     if (!wildlife_enabled) return;
     if (rand() % 100 < 5) {
@@ -569,7 +714,14 @@ void detect_wildlife() {
         printf("------------------------------\n");
     }
 }
-
+/**
+ * @brief Gerencia alertas de vida silvestre
+ * 
+ * Controla a duração dos alertas de detecção:
+ * - Verifica se o alerta atual excedeu o tempo máximo
+ * - Desativa o alerta após WILDLIFE_ALERT_DURATION_MS (10 segundos)
+ * - Limpa o status de detecção atual
+ */
 void check_wildlife_alerts() {
     if (!wildlife_enabled) return;
     uint32_t current_time = to_ms_since_boot(get_absolute_time());
@@ -579,7 +731,12 @@ void check_wildlife_alerts() {
         }
     }
 }
-
+/**
+ * @brief Simula leitura de sensor
+ * 
+ * @param sensor Configuração do sensor
+ * @return float Valor simulado da leitura
+ */
 float simulate_reading(SensorConfig *sensor) {
     float base = sensor->value;
     
@@ -607,7 +764,11 @@ float simulate_reading(SensorConfig *sensor) {
     if (new_value > sensor->max_val) new_value = sensor->max_val;
     return new_value;
 }
-
+/**
+ * @brief Atualiza o valor do sensor
+ * 
+ * @param sensor Sensor a ser atualizado
+ */
 void update_sensor_value(SensorConfig *sensor) {
     float new_value = simulate_reading(sensor);
     for (int i = 0; i < 9; i++) {
@@ -616,7 +777,12 @@ void update_sensor_value(SensorConfig *sensor) {
     sensor->history[9] = new_value;
     sensor->value = new_value;
 }
-
+/**
+ * @brief Calcula média móvel das últimas 10 leituras
+ * 
+ * @param sensor Sensor para cálculo
+ * @return float Média das leituras
+ */
 float calculate_moving_average(SensorConfig *sensor) {
     float sum = 0;
     for (int i = 0; i < 10; i++) {
@@ -624,11 +790,22 @@ float calculate_moving_average(SensorConfig *sensor) {
     }
     return sum / 10;
 }
-
+/**
+ * @brief Verifica anomalias nas leituras
+ * 
+ * @param sensor Sensor a ser verificado
+ * @return true Se houver anomalia
+ * @return false Caso contrário
+ */
 bool check_anomaly(SensorConfig *sensor) {
     return (sensor->value < sensor->anomaly_min || sensor->value > sensor->anomaly_max);
 }
-
+/**
+ * @brief Exibe dados dos sensores no display
+ * 
+ * Mostra valores atuais, médias e alertas no
+ * display OLED
+ */
 void display_sensor_data() {
     if (!display_initialized) return;
     ssd1306_clear();
@@ -717,7 +894,12 @@ void display_sensor_data() {
     ssd1306_update();
     update_neopixel_bars();
 }
-
+/**
+ * @brief Envia dados para porta serial
+ * 
+ * Envia leituras dos sensores e alertas via
+ * comunicação serial
+ */
 void send_serial_data() {
     printf("\n===== LEITURA DOS SENSORES =====\n");
     if (temp_enabled) {
@@ -754,7 +936,12 @@ void send_serial_data() {
     printf("\n------------------------------\n");
     sleep_ms(1000); // Atraso de 1 segundo
 }
-
+/**
+ * @brief Verifica estado dos botões
+ * 
+ * Processa entradas do usuário via botões
+ * e joystick
+ */
 void check_buttons() {
     debounce_buttons();
     
@@ -832,7 +1019,12 @@ void check_buttons() {
         display_sensor_data();
     }
 }
-
+/**
+ * @brief Implementa debounce dos botões
+ * 
+ * Elimina ruídos e bouncing nas leituras
+ * dos botões
+ */
 void debounce_buttons() {
     uint32_t current_time = to_ms_since_boot(get_absolute_time());
     bool button_a_state = gpio_get(BUTTON_A_PIN);
@@ -859,7 +1051,14 @@ void debounce_buttons() {
         joy_button_last_state = joy_button_state;
     }
 }
-
+/**
+ * @brief Função principal do sistema
+ * 
+ * Inicializa hardware e executa loop principal
+ * de monitoramento
+ * 
+ * @return int Código de retorno
+ */
 int main() {
     init_hardware();
     init_sensors();
